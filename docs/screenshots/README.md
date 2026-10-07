@@ -6,7 +6,8 @@ each one was produced, so they can be retaken after changes.
 
 ## How the current images were produced
 
-All images were taken on 2026-10-07/08 against the minikube deployment described in the guides.
+The `db-*.png` images are browser screenshots of phpMyAdmin taken by hand. All other images were
+taken on 2026-10-07/08 against the minikube deployment described in the guides.
 Each command was **run for real** and its actual output (including the ANSI colors) was rendered
 into a terminal-style image with headless Chrome; the Swagger UI image is a headless Chrome
 screenshot of the live page. A few details differ from the guide text:
@@ -82,3 +83,6 @@ scripts/deploy.sh
 | File | How | Capture when you see |
 |---|---|---|
 | `local-colored-logs.png` | Run the app from IntelliJ (`CountryInfoServiceApplication`), then `curl -s -X POST http://localhost:8080/api/v1/countries -H "Content-Type: application/json" -d '{"name": "kenya"}'` and the same with `"narnia"` | The IntelliJ console showing cyan (request received), green (success) and red (404) lines. Take it with `screencapture -iW docs/screenshots/local-colored-logs.png` and click the IntelliJ window |
+| `db-01-tables.png` | Start phpMyAdmin (README → "Browse the stored data"), log in as `app`/`app`, open `countrydb` | The three tables with row counts |
+| `db-02-country-info.png` | Click **Browse** on `country_info` | The stored countries |
+| `db-03-language.png` | Click **Browse** on `language` | The languages with their `country_id` |

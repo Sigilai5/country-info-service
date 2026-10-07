@@ -203,6 +203,43 @@ Delete:
 curl -s -X DELETE http://localhost:8080/api/v1/countries/1
 ```
 
+### 4. Browse the stored data (optional)
+
+To see what the service stores, run phpMyAdmin next to the MySQL container:
+
+```bash
+docker network create dbnet
+```
+
+```bash
+docker network connect dbnet mysql
+```
+
+```bash
+docker run -d --name phpmyadmin --network dbnet -p 8081:80 -e PMA_HOST=mysql phpmyadmin
+```
+
+Open http://localhost:8081 and log in as `app` / `app`. The `countrydb` database holds the two
+models from step 6 and Flyway's migration history:
+
+![countrydb tables](docs/screenshots/db-01-tables.png)
+
+`country_info`: one row per country, fetched from the SOAP API by `POST /api/v1/countries`:
+
+![country_info rows](docs/screenshots/db-02-country-info.png)
+
+`language`: one or more rows per country, linked by `country_id` (one country → many languages):
+
+![language rows](docs/screenshots/db-03-language.png)
+
+What to notice:
+
+- **The ISO code is unique** (`uk_country_info_iso_code`), which is how repeated and concurrent creates of the same country are kept to one row.
+- **`version` is the optimistic-locking counter.** It is `0` for every row here because none has been updated yet; each `PUT` increases it.
+- **`language.country_id` references `country_info.id`** with a foreign key and `ON DELETE CASCADE`, so deleting a country removes its languages. The same language (e.g. `swa` Swahili for Kenya and Tanzania) is stored once per country.
+- **Gaps in the IDs are expected.** IDs of deleted test rows are not reused, and MySQL also consumes an ID for each insert that loses a race on the unique ISO code.
+- **`flyway_schema_history`** records that migration `V1__create_country_info_and_language.sql` was applied; Hibernate only validates the schema.
+
 ### SoapUI
 
 To call the upstream SOAP operations directly (as in steps 2, 4 and 5 of the exercise), create a
