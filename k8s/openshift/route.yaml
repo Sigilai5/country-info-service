@@ -1,0 +1,30 @@
+# Production entry point on OpenShift (added by the OpenShift overlay in the gitops repo; not part of
+# the local kustomization). The OpenShift router (HAProxy) terminates TLS and sends each request
+# directly to a ready pod endpoint, in round-robin order.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: country-info-service
+  labels:
+    app.kubernetes.io/name: country-info-service
+    app.kubernetes.io/part-of: country-info
+  annotations:
+    # Round robin across the pods (the router default depends on the OpenShift version, so set it explicitly)
+    haproxy.router.openshift.io/balance: roundrobin
+    # Edge/re-encrypt routes add a sticky-session cookie by default, which would pin each browser to
+    # one pod and defeat round robin. The service is stateless, so stickiness is not needed.
+    haproxy.router.openshift.io/disable_cookies: "true"
+    # Longest legitimate request: SOAP retries take up to ~16s in the worst case
+    haproxy.router.openshift.io/timeout: 30s
+spec:
+  host: country-info.apps.<cluster-domain>
+  to:
+    kind: Service
+    name: country-info-service
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

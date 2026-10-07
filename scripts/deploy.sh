@@ -59,6 +59,15 @@ log "Applying manifests (kubectl kustomize k8s/ | kubectl apply)"
           -e "s|prometheus.io/port: \"8080\"|prometheus.io/port: \"8080\"\n        country-info/image-id: \"${IMAGE_ID}\"\n        country-info/db-secret-version: \"${SECRET_VERSION}\"|" \
     | kubectl apply -f - )
 
+# Local entry point with round-robin load balancing (the equivalent of the OpenShift Route), only when
+# the minikube ingress addon is enabled: minikube addons enable ingress
+if kubectl get ingressclass nginx >/dev/null 2>&1; then
+  log "Exposing the service through ingress-nginx (round robin)"
+  kubectl -n ingress-nginx patch configmap ingress-nginx-controller --type merge \
+    -p '{"data":{"load-balance":"round_robin"}}' >/dev/null
+  kubectl apply -f "${ROOT}/k8s/local/ingress.yaml"
+fi
+
 log "Waiting for the rollout to finish"
 if ! kubectl -n "${NAMESPACE}" rollout status deployment/country-info-service --timeout=300s; then
   echo

@@ -335,7 +335,7 @@ retry saw it, and nothing would be retried (found and fixed while testing).
 - **Caching:** the ISO code and full-info lookups are cached in memory per pod with Caffeine (max 1000 entries, 24 h).
   - *Why:* this reference data rarely changes, and a hit avoids two remote calls (a cached lookup takes ~3 ms vs ~300 ms).
   - *Trade-off:* each pod has its own cache. A shared Redis cache would raise the hit rate at many replicas but adds a dependency.
-- **Load balancing:** the Kubernetes Service spreads traffic across ready pods. Readiness probes and graceful shutdown remove pods from rotation cleanly.
+- **Load balancing (round robin):** clients enter through the OpenShift Route, whose HAProxy router sends requests to the ready pods in round-robin order, with sticky-session cookies disabled. Readiness probes and graceful shutdown take pods in and out of the rotation cleanly, and across data centers a global load balancer can round-robin between clusters. Verified locally with ingress-nginx: 100 requests split exactly 50/50 across two pods ([details](docs/DEPLOYMENT.md#load-balancing-round-robin)).
 - **Queuing was considered and not used.** The API is synchronous request/response and the SOAP lookups are fast and cached. If bulk imports were needed, a queue (e.g. Kafka or RabbitMQ) with consumers calling SOAP would decouple the work from user requests.
 - **Database protection:** the connection pool is limited per pod (`DB_POOL_SIZE`, default 10), page size is capped at 100, and sort fields are whitelisted.
 
@@ -441,7 +441,8 @@ comments; the log format and masking are in `logback-spring.xml`.
 
 ```
 ├── Dockerfile                      multi-stage image build
-├── k8s/                            Kustomize manifests for the microservice (Deployment, Service, HPA, PDB, config)
+├── k8s/                            Kustomize manifests for the microservice (Deployment, Service, HPA, PDB, config);
+│                                   openshift/route.yaml (production, round robin), local/ingress.yaml (minikube)
 ├── scripts/                        deploy.sh, smoke-test.sh, teardown.sh
 ├── docs/                           DEPLOYMENT.md, TROUBLESHOOTING.md, images/ (diagrams), screenshots/
 └── src/main/

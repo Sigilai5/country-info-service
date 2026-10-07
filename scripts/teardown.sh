@@ -12,7 +12,7 @@ if [[ "${1:-}" == "--all" ]]; then
 else
   echo "Deleting the app's resources (keeping the namespace and the DB secret)..."
   # Only resources from k8s/ carry this label; the secret created by deploy.sh does not, so it survives.
-  kubectl -n "${NAMESPACE}" delete deployment,service,configmap,hpa,pdb \
+  kubectl -n "${NAMESPACE}" delete deployment,service,configmap,hpa,pdb,ingress \
     -l app.kubernetes.io/part-of=country-info --ignore-not-found --wait=true
 fi
 kubectl get all -n "${NAMESPACE}" 2>/dev/null || true

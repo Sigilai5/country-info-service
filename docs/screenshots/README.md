@@ -50,6 +50,7 @@ DB_USERNAME=app DB_PASSWORD=app scripts/deploy.sh
 | `deploy-06-rolling-update.png` | `kubectl -n country-info rollout restart deployment/country-info-service && kubectl -n country-info rollout status deployment/country-info-service` | `deployment "country-info-service" successfully rolled out` |
 | `deploy-07-rollback.png` | `kubectl -n country-info rollout history deployment/country-info-service` then `kubectl -n country-info rollout undo deployment/country-info-service` | The revision list and `rolled back` |
 | `deploy-08-hpa.png` | `kubectl -n country-info get hpa` then `kubectl -n country-info top pods` | The HPA with a CPU percentage (not `<unknown>`) and pod CPU/memory |
+| `lb-round-robin.png` | With the ingress addon enabled (`minikube addons enable ingress`, then `scripts/deploy.sh`): `kubectl -n country-info get ingress,endpointslices`, then the two commands in DEPLOYMENT.md → "Verified locally (minikube)" | `100 200` and the per-pod counts (an even split) |
 
 After `deploy-07`, run `scripts/deploy.sh` to put the cluster back in line with the manifests.
 

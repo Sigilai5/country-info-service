@@ -3,6 +3,9 @@
 **Production, GitOps** (GitHub Actions → registry → gitops repo → Argo CD → OpenShift): every
 change reaches the cluster through Git. See [CI/CD to OpenShift (GitOps)](#cicd-to-openshift-gitops).
 
+Clients reach the pods through the OpenShift Route, which balances requests **round robin** (see
+[Load balancing](#load-balancing-round-robin)).
+
 This guide also shows how we deployed and verified it **locally** on minikube (Docker driver,
 running on Colima on macOS), using the same Dockerfile and manifests the pipeline deploys. See
 [Local deployment (minikube)](#local-deployment-minikube).
@@ -39,7 +42,9 @@ work on other clusters (see [Other clusters](#other-clusters)).
 | `k8s/namespace.yaml` | Namespace | Isolates everything in `country-info` |
 | `k8s/app/config.env` | ConfigMap (generated) | Non-secret config: database URL, SOAP URL and timeouts, log level |
 | `k8s/app/deployment.yaml` | Deployment | 2 replicas, zero-downtime rolling updates, startup/readiness/liveness probes, resource limits, read-only root filesystem |
-| `k8s/app/service.yaml` | Service (ClusterIP) | Load-balances requests across the ready pods |
+| `k8s/app/service.yaml` | Service (ClusterIP) | Stable name for the pods; selects the ready pods |
+| `k8s/openshift/route.yaml` | Route (OpenShift) | Production entry point: TLS, **round robin** across the pods, no sticky sessions |
+| `k8s/local/ingress.yaml` | Ingress (minikube) | Local entry point through ingress-nginx, round robin |
 | `k8s/app/hpa.yaml` | HorizontalPodAutoscaler | Scales 2 → 5 pods when average CPU > 70% |
 | `k8s/app/pdb.yaml` | PodDisruptionBudget | Keeps at least 1 pod up during node drains and upgrades |
 | `k8s/kustomization.yaml` | Kustomize | Ties it together; sets the namespace, labels and image tag |
@@ -74,10 +79,8 @@ What changes on **OpenShift**:
 
 - `oc` works like `kubectl` (`oc get pods`, `oc logs`, `oc rollout status ...`), and a project is a namespace.
 - OpenShift runs each pod with a random UID from the project's range, and its default `restricted-v2` SCC rejects the fixed `runAsUser: 1001`. Remove `runAsUser`/`runAsGroup`/`fsGroup` from `deployment.yaml` in the OpenShift overlay and let OpenShift assign them. The image still works with any UID: the application files in `/app` are world-readable, and the app only writes to `/tmp`, which is an `emptyDir`.
-- Expose the API with a **Route** (TLS edge termination) instead of an Ingress:
-  ```bash
-  oc -n country-info create route edge country-info --service=country-info-service
-  ```
+- Expose the API with the **Route** in `k8s/openshift/route.yaml` (TLS edge termination, round robin,
+  no sticky cookie), included by the OpenShift overlay; see [Load balancing](#load-balancing-round-robin).
 
 An Argo CD `Application` for this service (in the gitops repo):
 
@@ -103,6 +106,113 @@ spec:
     syncOptions:
       - CreateNamespace=true
 ```
+
+## Load balancing (round robin)
+
+The service is **stateless**: no HTTP sessions and no state on the pod (all data is in MySQL, and
+the caches only hold reference data). Any pod can serve any request, so load is spread with
+**round robin**, one request to each ready pod in turn, at the point where traffic enters the
+cluster.
+
+### Within a cluster (OpenShift Route)
+
+```
+ clients ──HTTPS──► OpenShift router (HAProxy) ── Route country-info-service
+                     TLS edge · balance roundrobin · no sticky cookie
+                              │  round robin, straight to the pod IPs of READY pods
+               ┌──────────────┼──────────────┐
+               ▼              ▼              ▼
+             pod 1          pod 2    ...   pod N        (HPA: 2-5 pods)
+```
+
+The Route is in [`k8s/openshift/route.yaml`](../k8s/openshift/route.yaml) and is added by the
+OpenShift overlay in the gitops repo. The settings that matter:
+
+```yaml
+metadata:
+  annotations:
+    haproxy.router.openshift.io/balance: roundrobin        # round robin across the pods
+    haproxy.router.openshift.io/disable_cookies: "true"    # no sticky sessions
+    haproxy.router.openshift.io/timeout: 30s
+spec:
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+- **Set `balance: roundrobin` explicitly.** The router's default algorithm depends on the OpenShift version.
+- **Disable the cookie.** Edge and re-encrypt routes add a sticky-session cookie by default, which pins each browser to one pod and defeats round robin. The service is stateless, so stickiness is not needed.
+- **Round robin happens at the Route, not the Service.** The router sends requests straight to the pod endpoints. A plain `Service` ClusterIP (used for pod-to-pod calls inside the cluster) picks endpoints at random with kube-proxy/OVN: even over many requests, but not strict round robin.
+
+### Across clusters
+
+For high availability across data centers, two OpenShift clusters run the same service and a
+global load balancer distributes clients between them, also round robin:
+
+```
+                       clients
+                          │  country-info.<domain>
+                          ▼
+          Global load balancer (e.g. F5 BIG-IP DNS/GTM)
+          round robin · health check per cluster
+             ┌─────────────────┴─────────────────┐
+             ▼                                   ▼
+   OpenShift cluster A (DC1)           OpenShift cluster B (DC2)
+   Route → pods (round robin)          Route → pods (round robin)
+             └─────────────────┬─────────────────┘
+                               ▼
+                  MySQL (replicated, reachable from both)
+```
+
+- **Health check:** the global load balancer probes `https://<cluster route>/actuator/health/readiness` and stops sending traffic to a cluster that fails.
+- **Same version everywhere:** an Argo CD `ApplicationSet` with a cluster generator deploys the same gitops revision to both clusters.
+- **Same hostname and certificate** on the Route in both clusters, so clients cannot tell which cluster served them.
+- **Shared data:** both clusters use the same (replicated) database, which is what makes round robin across clusters safe for a stateless service.
+
+### What keeps the rotation healthy
+
+| Mechanism | Effect on load balancing |
+|---|---|
+| Readiness probe (`/actuator/health/readiness`) | A pod receives traffic only once it is ready, and is removed from the rotation as soon as it fails or starts shutting down |
+| `preStop` (10s) + graceful shutdown (30s) | A terminating pod leaves the rotation first and finishes its in-flight requests (540/540 requests succeeded during a rolling restart) |
+| HorizontalPodAutoscaler (2-5 pods at 70% CPU) | New pods join the rotation automatically when load rises |
+| `topologySpreadConstraints` | Pods are spread across nodes, so one node failure removes only part of the rotation |
+| PodDisruptionBudget (min 1 available) | Node drains and upgrades never empty the rotation |
+| No session affinity | Every request is free to go to any pod |
+| `DB_POOL_SIZE` per pod (10) | Database connections grow with the number of pods; keep `pods × 10` below the database limit |
+
+### Verified locally (minikube)
+
+Locally, the **ingress-nginx** controller plays the role of the OpenShift router.
+[`k8s/local/ingress.yaml`](../k8s/local/ingress.yaml) routes `country-info.local` to the service,
+and `scripts/deploy.sh` sets the controller's algorithm to `round_robin` (when the ingress addon is
+enabled):
+
+```bash
+minikube addons enable ingress
+```
+
+```bash
+scripts/deploy.sh
+```
+
+Send 100 requests through the ingress from inside the cluster, then count which pod served each one
+(every request logs `Request completed` on the pod that handled it):
+
+```bash
+kubectl -n country-info run lb-test --rm -i -q --restart=Never --image=curlimages/curl:8.11.1 -- sh -c 'for i in $(seq 1 100); do curl -s -o /dev/null -w "%{http_code}\n" -H "Host: country-info.local" "http://ingress-nginx-controller.ingress-nginx/api/v1/countries?size=1"; done | sort | uniq -c'
+```
+
+```bash
+kubectl -n country-info logs -l app.kubernetes.io/name=country-info-service --since=1m --tail=-1 --prefix | grep "Request completed: GET /api/v1/countries" | awk '{print $1}' | sort | uniq -c
+```
+
+All 100 requests succeeded and were split **exactly 50 / 50** across the two pods:
+
+![Round robin across the pods](screenshots/lb-round-robin.png)
+
+Over a long run the split is even. Two consecutive requests can still land on the same pod, because
+each nginx worker process (4 here) keeps its own round-robin position.
 
 ## Local deployment (minikube)
 

@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;background:#282a36;}
+    .win{margin:0;background:#282a36;font:13px/18.5px Menlo,Monaco,'Courier New',monospace;color:#e6e6e6;}
+    .bar{height:30px;background:#3a3c4e;display:flex;align-items:center;padding:0 12px;gap:8px;}
+    .dot{width:12px;height:12px;border-radius:50%;display:inline-block}
+    .title{flex:1;text-align:center;color:#b8b8c8;font:12px -apple-system,Helvetica,sans-serif;margin-right:60px}
+    .term{padding:12px 16px 16px;white-space:pre;}
+    .cmdline{white-space:pre-wrap;word-break:break-all;}
+    .prompt{color:#5af78e} .cmd{color:#ffffff;font-weight:700}
+    .note{color:#8a8ca8;font-style:italic}
+    </style></head><body><div class="win"><div class="bar">
+    <span class="dot" style="background:#ff5f56"></span><span class="dot" style="background:#ffbd2e"></span><span class="dot" style="background:#27c93f"></span>
+    <span class="title">zsh — country-info-service</span></div>
+    <div class="term"><div class="cmdline"><span class="prompt">briansigilai@Brian-s-A15 country-info-service %</span> <span class="cmd">kubectl -n country-info get ingress,endpointslices</span></div><div class="out">NAME                                             CLASS   HOSTS                ADDRESS        PORTS   AGE
+ingress.networking.k8s.io/country-info-service   nginx   country-info.local   192.168.49.2   80      80s
+
+NAME                                                        ADDRESSTYPE   PORTS   ENDPOINTS                 AGE
+endpointslice.discovery.k8s.io/country-info-service-q5jxf   IPv4          8080    10.244.0.76,10.244.0.77   80m</div><div class="cmdline"><span class="prompt">briansigilai@Brian-s-A15 country-info-service %</span> <span class="cmd">kubectl -n country-info run lb-test --rm -i -q --restart=Never --image=curlimages/curl:8.11.1 -- sh -c &#x27;for i in $(seq 1 100); do curl -s -o /dev/null -w &quot;%{http_code}\n&quot; -H &quot;Host: country-info.local&quot; &quot;http://ingress-nginx-controller.ingress-nginx/api/v1/countries?size=1&quot;; done | sort | uniq -c&#x27;</span></div><div class="out">    100 200</div><div class="cmdline"><span class="prompt">briansigilai@Brian-s-A15 country-info-service %</span> <span class="cmd">kubectl -n country-info logs -l app.kubernetes.io/name=country-info-service --since=1m --tail=-1 --prefix | grep &quot;Request completed: GET /api/v1/countries&quot; | awk &#x27;{print $1}&#x27; | sort | uniq -c</span></div><div class="out">  50 [pod/country-info-service-547675d876-4pg6h/app]
+  50 [pod/country-info-service-547675d876-f95d7/app]</div></div></div></body></html>

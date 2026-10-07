@@ -1,0 +1,25 @@
+# Local (minikube) entry point, the equivalent of the OpenShift Route in k8s/openshift/route.yaml.
+# ingress-nginx sends each request straight to a pod endpoint (not via the Service's virtual IP) and
+# picks endpoints round robin; scripts/deploy.sh sets load-balance=round_robin on the controller.
+# Requires: minikube addons enable ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: country-info-service
+  namespace: country-info
+  labels:
+    app.kubernetes.io/name: country-info-service
+    app.kubernetes.io/part-of: country-info
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: country-info.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: country-info-service
+                port:
+                  name: http

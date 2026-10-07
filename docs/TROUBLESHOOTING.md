@@ -395,6 +395,8 @@ Turn on DEBUG for the app's own packages: set `APP_LOG_LEVEL=DEBUG` in `k8s/app/
   ```bash
   kubectl -n country-info run curl --rm -it --restart=Never --image=curlimages/curl:8.11.1 -- curl -s http://country-info-service/actuator/health
   ```
+- **`kubectl logs -l <selector>` shows only the last 10 lines per pod** unless you pass `--tail`.
+  When counting or searching across pods, add `--tail=-1` (everything) or e.g. `--tail=2000`.
 - **Same tag, new code:** `scripts/deploy.sh` stamps a hash of the image content into the pod
   template, so reusing a tag still rolls the pods. Applying the manifests by hand with
   `kubectl apply -k k8s/` does not; use `kubectl rollout restart deployment/country-info-service`.
