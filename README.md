@@ -203,7 +203,7 @@ Delete:
 curl -s -X DELETE http://localhost:8080/api/v1/countries/1
 ```
 
-### 4. Browse the stored data (optional)
+### 4. Browse the stored data
 
 To see what the service stores, run phpMyAdmin next to the MySQL container:
 
