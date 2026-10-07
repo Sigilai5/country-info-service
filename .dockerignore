@@ -1,0 +1,10 @@
+target/
+.git/
+.idea/
+*.iml
+.vscode/
+soapui/
+docs/
+k8s/
+scripts/
+*.log

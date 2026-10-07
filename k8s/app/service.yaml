@@ -1,0 +1,15 @@
+# Stable virtual IP + DNS name that load-balances across all ready app pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: country-info-service
+  labels:
+    app.kubernetes.io/name: country-info-service
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: country-info-service
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

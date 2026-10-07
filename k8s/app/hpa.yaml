@@ -1,0 +1,23 @@
+# Horizontal scaling: add pods when average CPU passes 70% of the request, remove them slowly
+# (5-minute window) to avoid flapping. Works because the app is stateless (state lives in MySQL).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: country-info-service
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: country-info-service
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300

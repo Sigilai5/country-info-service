@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<configuration>
+    <!-- Values come from application.properties / environment variables (resolved by Spring) -->
+    <springProperty scope="context" name="springApplicationName" source="spring.application.name" defaultValue="undefined"/>
+    <springProperty scope="context" name="logPath" source="logging.file.path" defaultValue="/tmp/logs"/>
+
+    <!-- %statusColor: green = SUCCESS, red = FAILED/ERROR, yellow = WARN, cyan = IN_PROGRESS.
+         %clr(...){faint}: Spring's dimmed text for the timestamp. Both only emit colors when the
+         output is a terminal/IDE (spring.output.ansi.enabled, auto-detected). -->
+    <conversionRule conversionWord="statusColor" class="com.ncba.countryinfo.logging.LogStatusColorConverter"/>
+    <conversionRule conversionWord="clr" class="org.springframework.boot.logging.logback.ColorConverter"/>
+
+    <!--
+        Pattern: timestamp | severity | service | requestId | logger | message + StructuredLog fields (%kvp).
+        Masking (applied to the requestId, message and fields):
+          1. Phone numbers 2547XXXXXXXX / 07XXXXXXXX / 7XXXXXXXX -> middle 4 digits replaced by ****
+          2. SOAP <nsN:Password>...</nsN:Password> values -> *****
+        A trailing " | " is dropped when a line has no fields.
+    -->
+    <property name="MASKED_BODY"
+              value="%replace(%replace(%replace(RequestId = %X{requestId:-N/A} | Logger = %logger{0} | %m | %kvp){'( \| )+$',''}){'(?&lt;=\b(254|0|)(7|1))\d{4}(?=\d{4}\b)','****'}){'(?&lt;=Password&gt;).+(?=\&lt;\/ns\d:Password)','*****'}"/>
+    <!-- Plain pattern for the log file (no color codes) -->
+    <property name="LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} | Severity = %-5p | MicroService = ${springApplicationName} | ${MASKED_BODY}%n"/>
+    <!-- Same layout for the console, colored by outcome. The %n is inside %statusColor on purpose:
+         logback 1.5 prints "%n" literally when it directly follows a composite that wraps %replace{...}. -->
+    <property name="CONSOLE_PATTERN"
+              value="%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} | %statusColor(Severity = %-5p) | MicroService = ${springApplicationName} | %statusColor(${MASKED_BODY}%n)"/>
+
+    <!-- Send logs to the console (stdout is what Kubernetes collects) -->
+    <appender name="console" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${CONSOLE_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Send logs to file: daily rollover, or whenever a file reaches 50MB; keep 30 days, max 1GB -->
+    <appender name="file" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${logPath}/${springApplicationName}_%d{yyyy-MM-dd}_%i.log</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Write to disk on a background thread so slow I/O never blocks request threads -->
+    <appender name="asyncFile" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>8192</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <appender-ref ref="file"/>
+    </appender>
+
+    <!-- Level of logs to collect and where to send them -->
+    <root level="INFO">
+        <appender-ref ref="console"/>
+        <appender-ref ref="asyncFile"/>
+    </root>
+</configuration>

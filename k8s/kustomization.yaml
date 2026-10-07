@@ -1,0 +1,29 @@
+# Kubernetes resources for the country-info-service microservice. The MySQL database is external
+# (managed service in production, local Docker MySQL for minikube); see app/config.env.
+# Apply with: scripts/deploy.sh   (it also creates the DB credentials Secret)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: country-info
+
+# Added to every resource (but not to selectors); scripts/teardown.sh deletes by this label
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: country-info
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - app/deployment.yaml
+  - app/service.yaml
+  - app/hpa.yaml
+  - app/pdb.yaml
+
+configMapGenerator:
+  - name: country-info-config
+    envs:
+      - app/config.env
+
+# Change the tag here (or via `kustomize edit set image`) to roll out a new version
+images:
+  - name: country-info-service
+    newTag: 1.0.0
