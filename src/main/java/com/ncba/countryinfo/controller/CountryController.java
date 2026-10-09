@@ -8,7 +8,6 @@ import com.ncba.countryinfo.dto.CountryUpdateRequest;
 import com.ncba.countryinfo.dto.PageResponse;
 import com.ncba.countryinfo.dto.WsResponse;
 import com.ncba.countryinfo.service.CountryManagementService;
-import com.ncba.countryinfo.service.CountryResult;
 import com.ncba.countryinfo.service.CountryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -44,23 +43,20 @@ public class CountryController {
     @Operation(summary = "Submit a country name",
             description = "Normalizes the name (e.g. \"kenya\" -> \"Kenya\"), resolves its ISO code via the "
                     + "CountryISOCode SOAP operation, fetches the full country info via FullCountryInfo and stores "
-                    + "it with its languages. Idempotent: submitting a country that is already stored returns the "
-                    + "stored record (200) without calling the SOAP service.")
+                    + "it with its languages. Submitting a country that is already stored is rejected with 409 "
+                    + "(the existing record is returned in data) without calling the SOAP service.")
     @ApiResponse(responseCode = "201", description = "Country fetched and stored")
-    @ApiResponse(responseCode = "200", description = "Country was already stored; stored record returned")
+    @ApiResponse(responseCode = "409", description = "Country already stored; the existing record is returned in data")
     @ApiResponse(responseCode = "400", description = "Missing or invalid name")
     @ApiResponse(responseCode = "404", description = "The SOAP service knows no country by that name")
     @ApiResponse(responseCode = "503", description = "The SOAP service is unavailable (after retries / circuit open)")
     @PostMapping("/api/v1/countries")
     public ResponseEntity<WsResponse<CountryInfoResponse>> createCountry(
             @Valid @RequestBody CountryRequest request) {
-        CountryResult result = countryService.processCountry(request.name());
-        if (!result.created()) {
-            return ResponseEntity.ok(WsResponse.success(HttpStatus.OK, "Country already exists", result.country()));
-        }
-        URI location = URI.create("/api/v1/countries/" + result.country().id());
+        CountryInfoResponse country = countryService.processCountry(request.name());
+        URI location = URI.create("/api/v1/countries/" + country.id());
         return ResponseEntity.created(location)
-                .body(WsResponse.success(HttpStatus.CREATED, "Country information stored", result.country()));
+                .body(WsResponse.success(HttpStatus.CREATED, "Country information stored", country));
     }
 
     @Operation(summary = "Fetch all country information",

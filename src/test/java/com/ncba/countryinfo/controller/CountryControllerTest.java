@@ -79,17 +79,18 @@ class CountryControllerTest {
     }
 
     @Test
-    void returns200WhenCountryAlreadyStored() throws Exception {
+    void returns409WithExistingRecordWhenCountryAlreadyStored() throws Exception {
         given(repository.findByName("Kenya"))
                 .willReturn(Optional.of(withId(CountryInfoMapper.toEntity(KENYA), 7L)));
 
         mockMvc.perform(post("/api/v1/countries")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\": \"KENYA\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.responseCode").value("200"))
-                .andExpect(jsonPath("$.responseMessage").value("Country already exists"))
-                .andExpect(jsonPath("$.data.id").value(7));
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.responseCode").value("409"))
+                .andExpect(jsonPath("$.responseMessage").value("Country 'Kenya' (KE) already exists with id 7"))
+                .andExpect(jsonPath("$.data.id").value(7))
+                .andExpect(jsonPath("$.data.isoCode").value("KE"));
     }
 
     @Test

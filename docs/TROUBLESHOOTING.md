@@ -278,7 +278,7 @@ with `responseCode` and `transactionCost` (ms).
 |---|---|---|
 | `400 Request validation failed` | Bad input; `errors` lists each field | Fix the request body |
 | `404 No country found with the name 'X'` | The SOAP service does not know that name | The service is case-sensitive and uses its own names (e.g. some multi-word countries); try SoapUI `CountryISOCode` directly |
-| `409` | Duplicate ISO code, or stale `version` on PUT | GET the record again and resend with its current `version` |
+| `409` | `POST` of a country that is already stored (the existing record is in `data`); duplicate ISO code or stale `version` on PUT | For POST, use the returned record; for PUT, GET the record again and resend with its current `version` |
 | `503 Country lookup service is not responding` | SOAP upstream down/slow; 3 attempts failed | [Section 7](#7-soap-upstream-issues-503s) |
 | `503 Country lookup service is temporarily unavailable` | Circuit breaker is **open** (too many recent SOAP failures); calls fail fast for 30s | [Section 7](#7-soap-upstream-issues-503s); it closes automatically once calls succeed |
 | `503 The database is taking too long to respond` / `The database is temporarily unavailable` | The database at `DB_URL` is slow or down (outside this deployment). The app fails fast instead of hanging and recovers on its own | Check the database; the log line with `logType="DATABASE_TIMEOUT"` names the operation and cause |
@@ -305,8 +305,8 @@ curl -s http://localhost:8080/actuator/prometheus | grep -E '^resilience4j_circu
 - `resilience4j_circuitbreaker_state{state="open"} 1.0` → the breaker is open.
 - `soap_client_requests_seconds_count{outcome="error"}` rising → transport failures (timeouts,
   connection refused). Log lines read e.g. `SOAP call failed: CountryISOCode - HttpTimeoutException: request timed out`.
-- Stored countries are **still served** while SOAP is down: `GET` endpoints and re-submitting an
-  already-stored country do not call SOAP.
+- Stored countries are **still served** while SOAP is down: `GET` endpoints do not call SOAP, and
+  re-submitting an already-stored country is answered with 409 straight from the database.
 
 If the upstream is just slow, raise `SOAP_READ_TIMEOUT` in `k8s/app/config.env` and redeploy.
 

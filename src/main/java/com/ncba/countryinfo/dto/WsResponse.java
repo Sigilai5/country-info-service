@@ -20,12 +20,17 @@ public record WsResponse<T>(
         @Schema(description = "Human-readable outcome", example = "Request processed successfully") String responseMessage,
         @Schema(description = "Correlation ID, also returned in the X-Request-ID header") String requestId,
         @Schema(description = "Response time (UTC)") Instant timestamp,
-        @Schema(description = "Response payload (absent on errors)") T data,
+        @Schema(description = "Response payload (absent on most errors; a 409 on create returns the existing record)") T data,
         @Schema(description = "Field validation errors (only on 400)") Map<String, String> errors) {
 
-    public static <T> WsResponse<T> success(HttpStatusCode status, String message, T data) {
+    /** Any outcome that carries a payload, e.g. a 409 that returns the existing record. */
+    public static <T> WsResponse<T> of(HttpStatusCode status, String message, T data) {
         return new WsResponse<>(String.valueOf(status.value()), message,
                 MDC.get(LogConstants.MDC_REQUEST_ID), Instant.now(), data, null);
+    }
+
+    public static <T> WsResponse<T> success(HttpStatusCode status, String message, T data) {
+        return of(status, message, data);
     }
 
     public static <T> WsResponse<T> error(HttpStatusCode status, String message) {

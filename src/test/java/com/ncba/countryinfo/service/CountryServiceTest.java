@@ -1,6 +1,7 @@
 package com.ncba.countryinfo.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
@@ -11,7 +12,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import java.util.List;
 import java.util.Optional;
 
+import com.ncba.countryinfo.dto.CountryInfoResponse;
 import com.ncba.countryinfo.entity.CountryInfo;
+import com.ncba.countryinfo.exception.CountryAlreadyExistsException;
 import com.ncba.countryinfo.mapper.CountryInfoMapper;
 import com.ncba.countryinfo.repository.CountryInfoRepository;
 import com.ncba.countryinfo.soap.CountryInfoSoapClient;
@@ -40,13 +43,14 @@ class CountryServiceTest {
     }
 
     @Test
-    void storedCountryIsReturnedWithoutCallingSoap() {
+    void storedCountryIsRejectedWithoutCallingSoap() {
         given(repository.findByName("Uganda")).willReturn(Optional.of(stored(UGANDA, 3L)));
 
-        CountryResult result = service.processCountry("  uganda ");
-
-        assertThat(result.created()).isFalse();
-        assertThat(result.country().id()).isEqualTo(3L);
+        assertThatThrownBy(() -> service.processCountry("  uganda "))
+                .isInstanceOf(CountryAlreadyExistsException.class)
+                .hasMessageContaining("already exists with id 3")
+                .extracting(ex -> ((CountryAlreadyExistsException) ex).getExisting().id())
+                .isEqualTo(3L);
         verifyNoInteractions(soapClient);
     }
 
@@ -56,9 +60,8 @@ class CountryServiceTest {
         given(soapClient.getIsoCode("Uganda")).willReturn("UG");
         given(repository.findByIsoCode("UG")).willReturn(Optional.of(stored(UGANDA, 3L)));
 
-        CountryResult result = service.processCountry("uganda");
-
-        assertThat(result.created()).isFalse();
+        assertThatThrownBy(() -> service.processCountry("uganda"))
+                .isInstanceOf(CountryAlreadyExistsException.class);
         verify(soapClient, never()).getFullCountryInfo(any());
         verify(repository, never()).saveAndFlush(any());
     }
@@ -71,16 +74,15 @@ class CountryServiceTest {
         given(soapClient.getFullCountryInfo("UG")).willReturn(UGANDA);
         given(repository.saveAndFlush(any(CountryInfo.class))).willAnswer(inv -> withId(inv.getArgument(0), 5L));
 
-        CountryResult result = service.processCountry("uganda");
+        CountryInfoResponse created = service.processCountry("uganda");
 
-        assertThat(result.created()).isTrue();
-        assertThat(result.country().id()).isEqualTo(5L);
-        assertThat(result.country().capitalCity()).isEqualTo("Kampala");
-        assertThat(result.country().languages()).extracting("name").containsExactly("English");
+        assertThat(created.id()).isEqualTo(5L);
+        assertThat(created.capitalCity()).isEqualTo("Kampala");
+        assertThat(created.languages()).extracting("name").containsExactly("English");
     }
 
     @Test
-    void concurrentInsertReturnsTheRowStoredByTheOtherRequest() {
+    void concurrentInsertIsRejectedWithTheRowStoredByTheOtherRequest() {
         given(repository.findByName("Uganda")).willReturn(Optional.empty());
         given(soapClient.getIsoCode("Uganda")).willReturn("UG");
         given(repository.findByIsoCode("UG"))
@@ -90,10 +92,10 @@ class CountryServiceTest {
         given(repository.saveAndFlush(any(CountryInfo.class)))
                 .willThrow(new DataIntegrityViolationException("Duplicate entry 'UG' for key 'uk_country_info_iso_code'"));
 
-        CountryResult result = service.processCountry("uganda");
-
-        assertThat(result.created()).isFalse();
-        assertThat(result.country().id()).isEqualTo(9L);
+        assertThatThrownBy(() -> service.processCountry("uganda"))
+                .isInstanceOf(CountryAlreadyExistsException.class)
+                .extracting(ex -> ((CountryAlreadyExistsException) ex).getExisting().id())
+                .isEqualTo(9L);
     }
 
     private static CountryInfo stored(CountryDetails details, Long id) {

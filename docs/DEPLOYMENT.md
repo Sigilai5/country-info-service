@@ -281,7 +281,7 @@ roll only when the image content, the config or the database credentials changed
 
 ### Verify
 
-Automated end-to-end check (health, create via SOAP, idempotent re-create, 404, 400, list, get,
+Automated end-to-end check (health, create via SOAP, duplicate create 409, 404, 400, list, get,
 update, stale-version 409, delete):
 
 ```bash

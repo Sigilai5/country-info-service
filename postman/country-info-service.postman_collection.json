@@ -1,0 +1,1054 @@
+{
+  "info": {
+    "_postman_id": "942ebe1b-5c8e-5bbb-b9aa-637cf215479a",
+    "name": "Country Info Service API",
+    "description": "Tests for the country-info-service REST API (NCBA Integration Microservices Engineer exercise).\n\nRun the folders in order (or the whole collection with the Collection Runner / Newman): the create request stores the country ID and version in collection variables that the later requests use, and the Cleanup folder deletes the test country so the run is repeatable.\n\nSet `baseUrl` to where the service runs: `http://localhost:8080` locally (`./mvnw spring-boot:run`) or through `kubectl -n country-info port-forward svc/country-info-service 8080:80`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// ---- Checks that apply to every API response ----",
+          "const path = pm.request.url.getPath();",
+          "if (!path.startsWith(\"/actuator\")) {",
+          "    pm.test(\"X-Request-ID header is returned\", () => pm.response.to.have.header(\"X-Request-ID\"));",
+          "    const contentType = pm.response.headers.get(\"Content-Type\") || \"\";",
+          "    if (contentType.includes(\"json\")) {",
+          "        const body = pm.response.json();",
+          "        pm.test(\"WsResponse envelope: responseCode, responseMessage, requestId, timestamp\", () => {",
+          "            pm.expect(body).to.include.keys(\"responseCode\", \"responseMessage\", \"requestId\", \"timestamp\");",
+          "            pm.expect(body.responseCode).to.eql(String(pm.response.code));",
+          "            pm.expect(body.requestId).to.eql(pm.response.headers.get(\"X-Request-ID\"));",
+          "        });",
+          "    }",
+          "}",
+          "pm.test(\"Response time is below 10s\", () => pm.expect(pm.response.responseTime).to.be.below(10000));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "testCountry",
+      "value": "ghana"
+    },
+    {
+      "key": "countryId",
+      "value": ""
+    },
+    {
+      "key": "version",
+      "value": "0"
+    },
+    {
+      "key": "staleVersion",
+      "value": "0"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 Health",
+      "description": "Is the service up? (Kubernetes uses the liveness/readiness groups for its probes.)",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK and status UP\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().status).to.eql(\"UP\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 Create (steps 3-6)",
+      "description": "POST a country name: the service normalizes it, calls the CountryISOCode and FullCountryInfo SOAP operations and stores the result.",
+      "item": [
+        {
+          "name": "Create country (POST ghana)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{testCountry}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Lower-case input is normalized to \"Ghana\" before the SOAP lookup. Returns 201 with a Location header; returns 409 (with the existing record in data) if Ghana is still stored from an earlier, interrupted run (the Cleanup folder deletes it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"201 Created (or 409 if left over from an earlier run)\", () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));",
+                  "if (pm.response.code === 201) {",
+                  "    pm.test(\"Location header points to the new country\", () =>",
+                  "        pm.expect(pm.response.headers.get(\"Location\")).to.eql(\"/api/v1/countries/\" + body.data.id));",
+                  "}",
+                  "pm.test(\"Name normalized and full country info stored\", () => {",
+                  "    pm.expect(body.data.name).to.eql(\"Ghana\");",
+                  "    pm.expect(body.data.isoCode).to.eql(\"GH\");",
+                  "    pm.expect(body.data.capitalCity).to.be.a(\"string\").and.not.empty;",
+                  "    pm.expect(body.data.languages).to.be.an(\"array\").that.is.not.empty;",
+                  "    pm.expect(body.data.version).to.be.a(\"number\");",
+                  "});",
+                  "pm.collectionVariables.set(\"countryId\", body.data.id);",
+                  "pm.collectionVariables.set(\"version\", body.data.version);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create again, different case (POST GHANA) → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"GHANA\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Duplicate create: rejected with 409 Conflict before any SOAP call; the existing record is returned in data."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"409 Conflict - country already exists\", () => {",
+                  "    pm.response.to.have.status(409);",
+                  "    pm.expect(body.responseMessage).to.include(\"already exists\");",
+                  "});",
+                  "pm.test(\"Existing record returned in data\", () => pm.expect(body.data.id).to.eql(Number(pm.collectionVariables.get(\"countryId\"))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Kenya (used by the ISO-conflict test)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"kenya\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"201 Created, or 409 if Kenya is already stored\", () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));",
+                  "pm.test(\"ISO code KE\", () => pm.expect(pm.response.json().data.isoCode).to.eql(\"KE\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 Read (step 7)",
+      "description": "Fetch all (paginated) and fetch by ID.",
+      "item": [
+        {
+          "name": "Fetch all countries (page 0, 5 per page, by name)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries?page=0&size=5&sort=name,asc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "5"
+                },
+                {
+                  "key": "sort",
+                  "value": "name,asc"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Paging metadata\", () => {",
+                  "    pm.expect(body.data).to.include.keys(\"content\", \"page\", \"size\", \"totalElements\", \"totalPages\", \"last\");",
+                  "    pm.expect(body.data.page).to.eql(0);",
+                  "    pm.expect(body.data.size).to.eql(5);",
+                  "    pm.expect(body.data.content.length).to.be.at.most(5);",
+                  "});",
+                  "pm.test(\"Sorted by name ascending\", () => {",
+                  "    const names = body.data.content.map(c => c.name);",
+                  "    pm.expect(names).to.eql([...names].sort((a, b) => a.localeCompare(b)));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Fetch country by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/{{countryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "{{countryId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"The test country with its languages\", () => {",
+                  "    pm.expect(body.data.id).to.eql(Number(pm.collectionVariables.get(\"countryId\")));",
+                  "    pm.expect(body.data.isoCode).to.eql(\"GH\");",
+                  "    pm.expect(body.data.languages).to.be.an(\"array\");",
+                  "});",
+                  "pm.collectionVariables.set(\"version\", body.data.version);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 Update (step 7)",
+      "description": "PUT replaces the country, including its languages. Send the version from your last read (optimistic locking).",
+      "item": [
+        {
+          "name": "Update country",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/{{countryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "{{countryId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isoCode\": \"GH\",\n  \"name\": \"Ghana\",\n  \"capitalCity\": \"Accra\",\n  \"phoneCode\": \"233\",\n  \"continentCode\": \"AF\",\n  \"currencyIsoCode\": \"GHS\",\n  \"countryFlag\": \"http://www.oorsprong.org/WebSamples.CountryInfo/Flags/Ghana.jpg\",\n  \"languages\": [\n    { \"isoCode\": \"eng\", \"name\": \"English\" },\n    { \"isoCode\": \"twi\", \"name\": \"Twi\" }\n  ],\n  \"version\": {{version}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Changes the languages (adds Twi) and keeps the rest. The version increases by 1."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const sentVersion = Number(pm.collectionVariables.get(\"version\"));",
+                  "pm.test(\"200 OK - country updated\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Languages replaced\", () =>",
+                  "    pm.expect(body.data.languages.map(l => l.isoCode)).to.have.members([\"eng\", \"twi\"]));",
+                  "pm.test(\"Version increased by 1\", () => pm.expect(body.data.version).to.eql(sentVersion + 1));",
+                  "pm.collectionVariables.set(\"staleVersion\", sentVersion);",
+                  "pm.collectionVariables.set(\"version\", body.data.version);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update with a stale version → 409",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/{{countryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "{{countryId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isoCode\": \"GH\",\n  \"name\": \"Ghana\",\n  \"capitalCity\": \"Accra\",\n  \"phoneCode\": \"233\",\n  \"continentCode\": \"AF\",\n  \"currencyIsoCode\": \"GHS\",\n  \"countryFlag\": \"http://www.oorsprong.org/WebSamples.CountryInfo/Flags/Ghana.jpg\",\n  \"languages\": [\n    { \"isoCode\": \"eng\", \"name\": \"English\" },\n    { \"isoCode\": \"twi\", \"name\": \"Twi\" }\n  ],\n  \"version\": {{staleVersion}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Simulates a second client that read the record before the previous update."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"409 Conflict - modified by someone else\", () => {",
+                  "    pm.response.to.have.status(409);",
+                  "    pm.expect(pm.response.json().responseMessage).to.include(\"modified by someone else\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update to an ISO code used by another country → 409",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/{{countryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "{{countryId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isoCode\": \"KE\",\n  \"name\": \"Ghana\",\n  \"languages\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"409 Conflict - ISO code already used\", () => {",
+                  "    pm.response.to.have.status(409);",
+                  "    pm.expect(pm.response.json().responseMessage).to.include(\"already used\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 Errors and validation",
+      "description": "Every error uses the same WsResponse envelope with the right HTTP status.",
+      "item": [
+        {
+          "name": "Empty name → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 with a field error for name\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().errors.name).to.eql(\"name is required\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid characters → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"<script>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 with a field error for name\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().errors).to.have.property(\"name\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed JSON → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"name\": ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 malformed body\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().responseMessage).to.eql(\"Malformed or unreadable JSON request body\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown country → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"narnia\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The SOAP service answers \"No country found by that name\"."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404 not found\", () => {",
+                  "    pm.response.to.have.status(404);",
+                  "    pm.expect(pm.response.json().responseMessage).to.include(\"Narnia\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong content type → 415",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "name=kenya"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"415 Unsupported Media Type\", () => pm.response.to.have.status(415));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unsupported method → 405",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"kenya\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"405 Method Not Allowed\", () => pm.response.to.have.status(405));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Non-numeric ID → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/abc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "abc"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 invalid id\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().responseMessage).to.include(\"'id'\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "ID must be positive → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "0"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 with a field error for id\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().errors).to.have.property(\"id\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown ID → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/999999999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "999999999"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404 not found\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown sort field → 400",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries?sort=password,asc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries"
+              ],
+              "query": [
+                {
+                  "key": "sort",
+                  "value": "password,asc"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 cannot sort\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().responseMessage).to.include(\"Cannot sort by 'password'\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid update fields → 400",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/{{countryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "{{countryId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isoCode\": \"G1\",\n  \"name\": \"\",\n  \"currencyIsoCode\": \"CEDI\",\n  \"countryFlag\": \"not a url\",\n  \"languages\": [ { \"isoCode\": \"\", \"name\": \"English\" } ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const errors = pm.response.json().errors;",
+                  "pm.test(\"400 with every invalid field listed\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(errors).to.include.keys(\"isoCode\", \"name\", \"currencyIsoCode\", \"countryFlag\", \"languages[0].isoCode\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 Cleanup (step 7: delete)",
+      "description": "Deletes the test country, so the collection can be run again from a clean state. Kenya is kept.",
+      "item": [
+        {
+          "name": "Delete country",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/{{countryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "{{countryId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK - deleted\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().responseMessage).to.include(\"deleted\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Fetch deleted country → 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/{{countryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "{{countryId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404 not found\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete again → 404",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/countries/{{countryId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "countries",
+                "{{countryId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404 not found\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

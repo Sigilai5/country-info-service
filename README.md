@@ -62,7 +62,7 @@ sequenceDiagram
     A->>D: findByName("Kenya")
     alt already stored
         D-->>A: row
-        A-->>C: 200 "Country already exists" (no SOAP call)
+        A-->>C: 409 Conflict, existing record in data (no SOAP call)
     else new country
         A->>S: CountryISOCode(sCountryName=Kenya) (step 4)
         S-->>A: KE
@@ -88,7 +88,7 @@ http://localhost:8080/swagger-ui.html.
 
 | Method | Path | Description | Success | Errors |
 |---|---|---|---|---|
-| `POST` | `/api/v1/countries` | Submit a country name; fetch from SOAP and store | `201` (new), `200` (already stored) | `400`, `404`, `503` |
+| `POST` | `/api/v1/countries` | Submit a country name; fetch from SOAP and store | `201` | `400`, `404`, `409` (already stored), `503` |
 | `GET` | `/api/v1/countries?page=0&size=20&sort=name,asc` | Fetch all (paginated, max 100 per page) | `200` | `400` (unknown sort field) |
 | `GET` | `/api/v1/countries/{id}` | Fetch by ID | `200` | `400`, `404` |
 | `PUT` | `/api/v1/countries/{id}` | Update (full replacement, including languages) | `200` | `400`, `404`, `409` |
@@ -137,7 +137,7 @@ Validation errors list every invalid field:
 | `400` | Invalid body, path or query parameter, or malformed JSON |
 | `404` | Unknown country name (SOAP) or unknown ID |
 | `405` / `415` | Wrong HTTP method / not `application/json` |
-| `409` | ISO code already used by another country, or stale `version` on `PUT` (optimistic locking) |
+| `409` | `POST` of a country that is already stored (the existing record is returned in `data`); ISO code already used by another country, or stale `version` on `PUT` (optimistic locking) |
 | `503` | SOAP service down or slow after retries, or circuit breaker open (`Retry-After: 30`); database timeout or outage (`Retry-After: 5`) |
 | `500` | Unexpected error (details only in the logs, linked by `requestId`) |
 
@@ -261,8 +261,8 @@ pointed at `http://localhost:8080/api/v1/countries`.
 |---|---|---|
 | `CountryNameFormatterTest` | unit | Name normalization (`kenya` → `Kenya`, `united states` → `United States`, `guinea-bissau` → `Guinea-Bissau`) |
 | `CountryInfoSoapClientTest` | unit + mock SOAP server | Request/response marshalling for both operations, and both "not found" formats |
-| `CountryServiceTest` | unit | Stored countries skip SOAP; new countries are fetched and stored; a lost insert race returns the other request's row |
-| `CountryControllerTest` | web slice | `POST`: 201/200/404/503, validation, malformed JSON, 405 |
+| `CountryServiceTest` | unit | Stored countries are rejected (409) before any SOAP call; new countries are fetched and stored; a lost insert race is rejected with the other request's row |
+| `CountryControllerTest` | web slice | `POST`: 201/409/404/503, validation, malformed JSON, 405 |
 | `CountryCrudControllerTest` | web slice | `GET`/`PUT`/`DELETE`: status codes, envelope, per-field validation errors, 409, database timeout/outage → 503 |
 | `DatabaseFailuresTest` | unit | Recognizes timeouts from every layer (query, lock wait, transaction, pool, socket) and nothing else |
 | `CountryCrudIntegrationTest` | integration, real MySQL | Flyway schema, language replacement without constraint violations, optimistic locking, cascade delete, sort whitelist (each test rolls back) |
@@ -272,6 +272,33 @@ pointed at `http://localhost:8080/api/v1/countries`.
 [Run locally](#1-start-mysql). The other tests have no external dependencies.
 
 Against a running Kubernetes deployment, `scripts/smoke-test.sh` runs 11 end-to-end checks.
+
+### Postman collection
+
+[`postman/country-info-service.postman_collection.json`](postman/country-info-service.postman_collection.json)
+tests the whole API: 23 requests with 99 assertions on status codes, the `WsResponse` envelope, the
+`X-Request-ID` header and the returned data.
+
+| Folder | Requests |
+|---|---|
+| 00 Health | `/actuator/health` is `UP` |
+| 01 Create | POST `ghana` → 201 (normalized, SOAP data stored); POST `GHANA` → 409 with the existing record; POST `kenya` |
+| 02 Read | Paged list sorted by name; get by ID |
+| 03 Update | PUT with the current `version` → 200 and version + 1; stale version → 409; ISO code of another country → 409 |
+| 04 Errors and validation | 400 (empty name, invalid characters, malformed JSON, bad ID, unknown sort field, invalid update fields), 404 (unknown country, unknown ID), 405, 415 |
+| 05 Cleanup | DELETE → 200, then GET and DELETE → 404 |
+
+The requests are chained: the create request saves the country's `id` and `version` in collection
+variables for the later ones, and the cleanup deletes the test country, so the collection can be
+run again and again.
+
+- **In Postman:** Import the file, check the `baseUrl` collection variable (default
+  `http://localhost:8080`), then run it with the **Collection Runner**.
+- **From the command line** with Newman (needs Node.js):
+  ```bash
+  npx newman run postman/country-info-service.postman_collection.json
+  ```
+  To run it against Kubernetes, start `kubectl -n country-info port-forward svc/country-info-service 8080:80` first.
 
 ---
 
@@ -328,7 +355,7 @@ Verified on minikube:
 | Circuit breaker | opens at ≥50% failures over the last 10 calls (min 5); open for 30s; tests recovery with 3 calls | Stops calling a dead upstream, so requests fail in ~3 ms instead of ~1.5 s |
 | Fallback | → `503` with `Retry-After: 30` | A clear, retryable error instead of a 500 |
 | Not-found answers | no retry, not counted as a failure | A valid business answer is not an outage |
-| Graceful degradation | stored countries are served from MySQL | GET endpoints and repeat POSTs keep working while SOAP is down |
+| Graceful degradation | stored countries are served from MySQL | GET endpoints keep working while SOAP is down, and duplicate POSTs are answered (409) without calling it |
 
 The **database** has the same protection, so no call to MySQL can hang a request:
 
@@ -356,7 +383,7 @@ retry saw it, and nothing would be retried (found and fixed while testing).
 ### Data and consistency
 
 - **The schema is owned by Flyway** (`db/migration/V1__...sql`). Hibernate only validates it (`ddl-auto=validate`), so it never alters production tables.
-- **`iso_code` is unique.** Creating a country is idempotent: a country already stored is returned with 200, and concurrent creates of the same country are settled by the unique constraint (the losing requests return the winner's row). Tested with 6 parallel requests: one 201, five 200s, one row.
+- **No duplicates: `iso_code` is unique.** Submitting a country that is already stored is rejected with **409 Conflict** before any SOAP call, and the response carries the existing record in `data` (so the client still gets its `id`). Concurrent creates of the same new country are settled by the unique constraint: the first insert wins (201), the others get 409 with the winner's record. Tested with 6 parallel requests: one 201, five 409s, one row.
 - **No transaction stays open during SOAP calls.** The remote calls happen first; then the country and its languages are saved in one short transaction, so slow upstream calls can't exhaust the connection pool.
 - **Optimistic locking (`@Version`)** prevents lost updates. `PUT` with a stale `version` returns 409.
 - **One country has many languages** (rather than a shared language table with a many-to-many link).
@@ -481,6 +508,7 @@ comments; the log format and masking are in `logback-spring.xml`.
 ├── k8s/                            Kustomize manifests for the microservice (Deployment, Service, HPA, PDB, config);
 │                                   openshift/route.yaml (production, round robin), local/ingress.yaml (minikube)
 ├── scripts/                        deploy.sh, smoke-test.sh, teardown.sh
+├── postman/                        Postman collection (23 requests, 99 assertions)
 ├── docs/                           DEPLOYMENT.md, TROUBLESHOOTING.md, images/ (diagrams), screenshots/
 └── src/main/
     ├── java/com/ncba/countryinfo/

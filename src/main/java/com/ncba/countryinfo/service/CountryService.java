@@ -5,7 +5,9 @@ import static com.ncba.countryinfo.logging.LogConstants.SUCCESS_STATUS;
 
 import java.util.Optional;
 
+import com.ncba.countryinfo.dto.CountryInfoResponse;
 import com.ncba.countryinfo.entity.CountryInfo;
+import com.ncba.countryinfo.exception.CountryAlreadyExistsException;
 import com.ncba.countryinfo.exception.CountryNotFoundException;
 import com.ncba.countryinfo.logging.LogConstants;
 import com.ncba.countryinfo.logging.StructuredLog;
@@ -33,11 +35,11 @@ public class CountryService {
      * Name -> normalized name (step 3) -> ISO code (step 4) -> full country info (step 5) -> stored
      * in MySQL (step 6).
      *
-     * <p>Idempotent: a country that is already stored is returned as-is without calling SOAP. No
-     * database transaction is held open during the (slow, remote) SOAP calls; the country and its
-     * languages are then saved atomically in one short transaction.
+     * <p>A country that is already stored is rejected with {@link CountryAlreadyExistsException}
+     * (409) before any SOAP call. No database transaction is held open during the (slow, remote)
+     * SOAP calls; the country and its languages are then saved atomically in one short transaction.
      */
-    public CountryResult processCountry(String rawName) {
+    public CountryInfoResponse processCountry(String rawName) {
         long startTime = System.currentTimeMillis();
 
         // Step 3: normalize the name ("kenya" -> "Kenya")
@@ -47,10 +49,10 @@ public class CountryService {
                 .with("countryName", name)
                 .write();
 
-        // Already stored? Serve it from the database, no SOAP calls needed.
+        // Already stored? Reject it before calling SOAP.
         Optional<CountryInfo> stored = repository.findByName(name);
         if (stored.isPresent()) {
-            return existing(stored.get(), "name '" + name + "'", startTime);
+            throw alreadyExists(stored.get(), "name '" + name + "'", startTime);
         }
 
         // Step 4: resolve the ISO code via CountryISOCode
@@ -73,7 +75,7 @@ public class CountryService {
         // The stored name may differ from the input (e.g. an alias), so also check by ISO code.
         stored = repository.findByIsoCode(isoCode);
         if (stored.isPresent()) {
-            return existing(stored.get(), "ISO code " + isoCode, startTime);
+            throw alreadyExists(stored.get(), "ISO code " + isoCode, startTime);
         }
 
         // Step 5: use the ISO code to fetch the full country info via FullCountryInfo
@@ -101,7 +103,7 @@ public class CountryService {
         } catch (DataIntegrityViolationException ex) {
             // Another request stored the same country between our check and our insert (unique iso_code).
             CountryInfo winner = repository.findByIsoCode(isoCode).orElseThrow(() -> ex);
-            return existing(winner, "ISO code " + isoCode + " (stored by a concurrent request)", startTime);
+            throw alreadyExists(winner, "ISO code " + isoCode + " (stored by a concurrent request)", startTime);
         }
         log("Country stored: " + saved.getName() + " (" + saved.getIsoCode() + ") with id " + saved.getId(),
                 "info", SUCCESS_STATUS, "Country persistence", startTime)
@@ -112,19 +114,18 @@ public class CountryService {
                 .with("languageCount", saved.getLanguages().size())
                 .write();
 
-        return new CountryResult(CountryInfoMapper.toResponse(saved), true);
+        return CountryInfoMapper.toResponse(saved);
     }
 
-    private CountryResult existing(CountryInfo country, String matchedBy, long startTime) {
+    private CountryAlreadyExistsException alreadyExists(CountryInfo country, String matchedBy, long startTime) {
         log("Country already stored, matched by " + matchedBy + ": id " + country.getId()
-                + " - returning stored record without calling SOAP", "info", SUCCESS_STATUS,
-                "Country lookup (database)", startTime)
+                + " - rejecting duplicate", "warn", FAILED_STATUS, "Country lookup (database)", startTime)
                 .setTargetSystem("MySQL")
-                .setResponseCode("200")
+                .setResponseCode("409")
                 .with("countryId", country.getId())
                 .with("isoCode", country.getIsoCode())
                 .write();
-        return new CountryResult(CountryInfoMapper.toResponse(country), false);
+        return new CountryAlreadyExistsException(CountryInfoMapper.toResponse(country));
     }
 
     private StructuredLog log(String message, String level, String status, String operation,

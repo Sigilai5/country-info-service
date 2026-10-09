@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import com.ncba.countryinfo.dto.CountryInfoResponse;
 import com.ncba.countryinfo.dto.WsResponse;
 import com.ncba.countryinfo.logging.LogConstants;
 import com.ncba.countryinfo.logging.RequestLoggingFilter;
@@ -104,6 +105,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         errorLog(request, HttpStatus.NOT_FOUND, ex.getMessage(), "warn").write();
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(WsResponse.error(HttpStatus.NOT_FOUND, ex.getMessage()));
+    }
+
+    /** Duplicate create: 409, with the existing record in data so the client can use it. */
+    @ExceptionHandler(CountryAlreadyExistsException.class)
+    public ResponseEntity<WsResponse<CountryInfoResponse>> handleAlreadyExists(CountryAlreadyExistsException ex,
+            NativeWebRequest request) {
+        errorLog(request, HttpStatus.CONFLICT, ex.getMessage(), "warn").write();
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(WsResponse.of(HttpStatus.CONFLICT, ex.getMessage(), ex.getExisting()));
     }
 
     @ExceptionHandler(ConflictException.class)
