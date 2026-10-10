@@ -63,16 +63,16 @@ CI (GitHub Actions) and GitOps CD (Argo CD), so the cluster always matches what 
 | 2 | The push triggers the CI workflow | GitHub Actions |
 | CI | Build and run the tests (`./mvnw verify`), build the image tagged with the **commit SHA**, scan it (e.g. Trivy, fail on HIGH/CRITICAL), push it | The same `Dockerfile` as locally |
 | 3 | The image is pushed to the registry as `ms-country-info:<commit-sha>` | Docker Hub, ECR, Harbor or the OpenShift internal registry |
-| 4 | CI commits the new tag to the **gitops repo** (`kustomize edit set image ...`) | The gitops repo holds the manifests from `k8s/` with one overlay per environment |
+| 4 | Argo CD Image Updater watches the registry, detects the new image tag, and commits the updated tag to the **gitops repo** | The gitops repo holds the manifests from `k8s/` with one overlay per environment; CI does not need write access to this repo |
 | 5 | Argo CD notices the commit (webhook, or polling every 3 minutes as a fallback) | Compares desired state (Git) with live state (cluster) |
 | 6 | Argo CD syncs: applies the manifests and reports **Synced / Healthy** | Health uses the Deployment rollout, i.e. the readiness probes |
 | 7 | The kubelet pulls the image with an `imagePullSecret` | Private registry credentials stored as a Secret in the namespace |
 
 Why it is built this way:
 
-- **Tag images with the commit SHA, never `:latest`.** Every build gets a unique, traceable tag. With `:latest` the gitops repo would not change, Argo CD would see no diff and nothing would be deployed.
+- **Tag images with the commit SHA, never `:latest`.** Every build gets a unique, traceable tag. Image Updater writes the selected tag into Git; a mutable `:latest` tag would not create a manifest diff for Argo CD to sync.
 - **Git is the single source of truth.** Every deployment is a commit, so it is reviewed, audited and reverted with `git revert` (Argo CD then rolls back). No one needs `kubectl apply` access to production.
-- **Alternative to step 4:** Argo CD Image Updater can watch the registry and commit the new tag to the gitops repo itself, so CI never needs write access to it.
+- **Image Updater owns the image-tag update.** Configure it to watch the service image in the registry and write tag changes back to the gitops repo. Give it registry read access and narrowly scoped Git write credentials; the CI workflow only needs to build, scan and push the image.
 - **Secrets stay out of Git:** the `country-info-db` Secret and the registry `imagePullSecret` come from a secrets manager (External Secrets Operator, Sealed Secrets or Vault), not from the gitops repo.
 
 What changes on **OpenShift**:
